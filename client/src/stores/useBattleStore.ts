@@ -1,9 +1,33 @@
 import { create } from 'zustand';
-import type { StatStages, BattlePokemon } from '../game/types';
+import type { StatStages, BattlePokemon, InventoryItem } from '../game/types';
 
 export type BattlePhase = 'START' | 'PLAYER_SELECT' | 'PLAYER_SWITCH' | 'PLAYER_ANIMATION' | 'ENEMY_ANIMATION' | 'END';
 
 const DEFAULT_STAGES: StatStages = { atk: 0, def: 0, spa: 0, spd: 0, spe: 0, acc: 0, eva: 0 };
+
+// Simple hardcoded effects for MVP
+const ITEM_EFFECTS: Record<string, (mon: BattlePokemon) => { success: boolean, msg: string, changes?: Partial<BattlePokemon> }> = {
+    'Potion': (mon) => {
+        if (mon.currentHp >= mon.maxHp) return { success: false, msg: 'It had no effect!' };
+        const heal = 20;
+        const newHp = Math.min(mon.maxHp, mon.currentHp + heal);
+        return { success: true, msg: `Used Potion! Restored ${newHp - mon.currentHp} HP.`, changes: { currentHp: newHp } };
+    },
+    'Super Potion': (mon) => {
+        if (mon.currentHp >= mon.maxHp) return { success: false, msg: 'It had no effect!' };
+        const heal = 60;
+        const newHp = Math.min(mon.maxHp, mon.currentHp + heal);
+        return { success: true, msg: `Used Super Potion! Restored ${newHp - mon.currentHp} HP.`, changes: { currentHp: newHp } };
+    },
+    'Antidote': (mon) => {
+        if (mon.status !== 'PSN') return { success: false, msg: 'It had no effect!' };
+        return { success: true, msg: `Used Antidote! Cured poison!`, changes: { status: null, statusCounter: 0 } };
+    },
+    'Paralyze Heal': (mon) => {
+        if (mon.status !== 'PAR') return { success: false, msg: 'It had no effect!' };
+        return { success: true, msg: `Used Paralyze Heal! Cured paralysis!`, changes: { status: null } };
+    }
+};
 
 interface BattleState {
     phase: BattlePhase;
@@ -17,6 +41,7 @@ interface BattleState {
     playerMoves: any[];
     playerStages: StatStages;
     playerStatus: string | null;
+    inventory: InventoryItem[];
     
     // Enemy State
     enemyParty: BattlePokemon[];
@@ -37,13 +62,17 @@ interface BattleState {
     
     applyBoosts: (target: 'player' | 'enemy', boosts: Partial<StatStages>) => void;
     setStatus: (target: 'player' | 'enemy', status: string) => void;
-    applyStatus: (target: 'player' | 'enemy', status: 'BRN' | 'PAR' | 'PSN' | 'SLP' | 'FRZ') => void;
+    applyStatus: (target: 'player' | 'enemy', status: 'BRN' | 'PAR' | 'PSN' | 'SLP' | 'FRZ' | 'SEED' | 'WRAP') => void;
+    setVolatile: (target: 'player' | 'enemy', update: any) => void;
 
     initBattle: (playerParty: BattlePokemon[], enemyParty: BattlePokemon[]) => void;
     switchPlayerPokemon: (index: number) => void;
+    switchEnemyPokemon: (index: number) => void;
     
     selectedMoveIndex: number | null;
     setSelectedMove: (index: number | null) => void;
+    
+    useItem: (itemIndex: number) => void;
 }
 
 export const useBattleStore = create<BattleState>((set) => ({
@@ -57,6 +86,12 @@ export const useBattleStore = create<BattleState>((set) => ({
     playerMoves: [],
     playerStages: { ...DEFAULT_STAGES },
     playerStatus: null,
+    inventory: [
+        { item: { id: 'potion', name: 'Potion', desc: 'Restores 20 HP' }, count: 5 },
+        { item: { id: 'superpotion', name: 'Super Potion', desc: 'Restores 60 HP' }, count: 2 },
+        { item: { id: 'antidote', name: 'Antidote', desc: 'Cures Poison' }, count: 1 },
+        { item: { id: 'paralyzeheal', name: 'Paralyze Heal', desc: 'Cures Paralysis' }, count: 1 }
+    ],
     
     enemyParty: [],
     activeEnemyIndex: 0,
@@ -104,12 +139,12 @@ export const useBattleStore = create<BattleState>((set) => ({
             const currentVal = current[stat as keyof StatStages];
             const change = val as number;
 
-            if (change > 0 && currentVal >= 3) {
+            if (change > 0 && currentVal >= 6) {
                  newLogs.push(`${monName}'s ${stat.toUpperCase()} won't go any higher!`);
-            } else if (change < 0 && currentVal <= -3) {
+            } else if (change < 0 && currentVal <= -6) {
                  newLogs.push(`${monName}'s ${stat.toUpperCase()} won't go any lower!`);
             } else {
-                 next[stat as keyof StatStages] = Math.max(-3, Math.min(3, currentVal + change));
+                 next[stat as keyof StatStages] = Math.max(-6, Math.min(6, currentVal + change));
             }
         });
 
@@ -137,6 +172,19 @@ export const useBattleStore = create<BattleState>((set) => ({
         return {
             [isPlayer ? 'playerParty' : 'enemyParty']: party,
             [isPlayer ? 'playerStatus' : 'enemyStatus']: status
+        };
+    }),
+
+    setVolatile: (target, update) => set((state) => {
+        const isPlayer = target === 'player';
+        const party = isPlayer ? [...state.playerParty] : [...state.enemyParty];
+        const index = isPlayer ? state.activePlayerIndex : state.activeEnemyIndex;
+        
+        const currentVolatile = party[index].volatile || {};
+        party[index].volatile = { ...currentVolatile, ...update };
+
+        return {
+             [isPlayer ? 'playerParty' : 'enemyParty']: party
         };
     }),
 
@@ -174,6 +222,63 @@ export const useBattleStore = create<BattleState>((set) => ({
             battleLog: [...state.battleLog, `Go! ${newMon.name}!`]
         };
     }),
+
+    switchEnemyPokemon: (index) => set((state) => {
+        const newMon = state.enemyParty[index];
+        if (!newMon || newMon.currentHp <= 0) return {};
+
+        return {
+            activeEnemyIndex: index,
+            enemyHp: newMon.currentHp,
+            enemyMaxHp: newMon.maxHp,
+            enemyStages: { ...DEFAULT_STAGES },
+            enemyStatus: newMon.status || null,
+            battleLog: [...state.battleLog, `Enemy sent out ${newMon.name}!`]
+        };
+    }),
     
-    setSelectedMove: (index) => set({ selectedMoveIndex: index })
+    setSelectedMove: (index) => set({ selectedMoveIndex: index }),
+
+    useItem: (itemIndex) => set((state) => {
+        const invItem = state.inventory[itemIndex];
+        if (!invItem || invItem.count <= 0) return {};
+
+        const activeMon = state.playerParty[state.activePlayerIndex];
+        const effectFn = ITEM_EFFECTS[invItem.item.name];
+        
+        if (!effectFn) {
+            return { battleLog: [...state.battleLog, `Cannot use ${invItem.item.name} right now.`] };
+        }
+
+        const result = effectFn(activeMon);
+        
+        if (!result.success) {
+             return { battleLog: [...state.battleLog, result.msg] };
+        }
+
+        // Apply Changes
+        const newParty = [...state.playerParty];
+        newParty[state.activePlayerIndex] = { ...activeMon, ...result.changes };
+        
+        // Update Inventory
+        const newInventory = [...state.inventory];
+        newInventory[itemIndex] = { ...invItem, count: invItem.count - 1 };
+
+        // Determine Updates
+        const updates: Partial<BattleState> = {
+            inventory: newInventory,
+            playerParty: newParty,
+            battleLog: [...state.battleLog, result.msg],
+            phase: 'ENEMY_ANIMATION' // Using item takes turn
+        };
+
+        if (result.changes?.currentHp !== undefined) {
+            updates.playerHp = result.changes.currentHp;
+        }
+        if (result.changes?.status !== undefined) {
+            updates.playerStatus = result.changes.status as string | null;
+        }
+
+        return updates;
+    })
 }));

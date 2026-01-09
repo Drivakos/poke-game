@@ -96,6 +96,46 @@ app.get('/api/natures', async (req, res) => {
     }
 });
 
+// 6. Get Items (Paginated)
+app.get('/api/items', async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 50;
+        const skip = (page - 1) * limit;
+
+        const items = await db.collection('items')
+            .find({})
+            .project({ id: 1, name: 1, desc: 1, shortDesc: 1, sprite: 1 })
+            .sort({ name: 1 })
+            .skip(skip)
+            .limit(limit)
+            .toArray();
+
+        res.json(items);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 7. Get Item by Key/ID
+app.get('/api/items/:key', async (req, res) => {
+    try {
+        const key = req.params.key;
+        const query = isNaN(key) ? { id: key } : { num: parseInt(key) }; // Showdown uses 'id' (string) and 'num' (number) usually
+        // Actually, let's just try both or standard 'id' (string key)
+        // Adjusting query to be safe: search 'id' (string) or 'name'
+        
+        const item = await db.collection('items').findOne({ 
+            $or: [ { id: key }, { name: key } ] 
+        });
+        
+        if (!item) return res.status(404).json({ error: 'Item not found' });
+        res.json(item);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
 });

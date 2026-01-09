@@ -11,13 +11,15 @@ export const BattleOverlay: React.FC = () => {
             enemyHp, enemyMaxHp, enemyStages, enemyStatus,
             playerMoves, 
             battleLog,
+            inventory, // Added inventory
             setPhase,
             addLog,
             setSelectedMove,
-            switchPlayerPokemon
+            switchPlayerPokemon,
+            useItem // Added useItem
         } = useBattleStore();
     
-        const [view, setView] = useState<'MAIN' | 'FIGHT' | 'PARTY'>('MAIN');
+        const [view, setView] = useState<'MAIN' | 'FIGHT' | 'PARTY' | 'BAG'>('MAIN');
     
         const activePlayerMon = playerParty[activePlayerIndex];
         const activeEnemyMon = enemyParty[activeEnemyIndex];
@@ -42,10 +44,21 @@ export const BattleOverlay: React.FC = () => {
     
         const handleFightClick = () => setView('FIGHT');
         const handlePartyClick = () => setView('PARTY');
-        const handleBack = () => setView('MAIN');
-    
-            const handleMoveClick = (moveIndex: number) => {
-                const move = playerMoves[moveIndex];
+        const handleBagClick = () => setView('BAG');
+            const handleBack = () => setView('MAIN');
+        
+            const renderPartyIcons = (party: any[]) => (
+                <div style={styles.partyIcons}>
+                    {party.map((p, i) => (
+                        <div key={i} style={{
+                            ...styles.partyIcon,
+                            background: p.currentHp > 0 ? (p.status ? '#ffc107' : '#4caf50') : '#555'
+                        }} />
+                    ))}
+                </div>
+            );
+        
+            const handleMoveClick = (moveIndex: number) => {                const move = playerMoves[moveIndex];
                 if (!move) return;
         
                 // Check for useless Status Moves (Stat Limits)
@@ -59,7 +72,7 @@ export const BattleOverlay: React.FC = () => {
                         const current = stages[stat as keyof StatStages];
                         const change = val as number;
                         // If attempting to raise and not maxed, OR attempting to lower and not min
-                        if ((change > 0 && current < 3) || (change < 0 && current > -3)) {
+                        if ((change > 0 && current < 6) || (change < 0 && current > -6)) {
                             allFailed = false;
                             break;
                         }
@@ -83,15 +96,20 @@ export const BattleOverlay: React.FC = () => {
             switchPlayerPokemon(index);
             setView('MAIN');
         };
+
+        const handleUseItem = (index: number) => {
+            useItem(index);
+            setView('MAIN');
+        };
     
         if (!activePlayerMon || !activeEnemyMon) return null;
     
         return (
             <div style={styles.overlay}>
                 {/* Enemy HUD */}
-                <div style={styles.enemyHud}>
-                    <div style={styles.header}>
-                        <span style={styles.nameTag}>{activeEnemyMon.name} Lv.{activeEnemyMon.level}</span>
+                            <div style={styles.enemyHud}>
+                                {renderPartyIcons(enemyParty)}
+                                <div style={styles.header}>                        <span style={styles.nameTag}>{activeEnemyMon.name} Lv.{activeEnemyMon.level}</span>
                         {enemyStatus && <span style={styles.statusTag}>{enemyStatus.toUpperCase()}</span>}
                     </div>
                     <div style={styles.hpBarContainer}>
@@ -124,7 +142,7 @@ export const BattleOverlay: React.FC = () => {
                             {view === 'MAIN' && (
                                 <div style={styles.menu}>
                                     <button style={styles.btn} onClick={handleFightClick}>FIGHT</button>
-                                    <button style={styles.btn}>BAG</button>
+                                    <button style={styles.btn} onClick={handleBagClick}>BAG</button>
                                     <button style={styles.btn} onClick={handlePartyClick}>POKEMON</button>
                                     <button style={styles.btn}>RUN</button>
                                 </div>
@@ -150,6 +168,18 @@ export const BattleOverlay: React.FC = () => {
                                             <div style={{width: '60px', height: '4px', background: '#ccc', marginTop: '2px'}}>
                                                 <div style={{width: hpPercent(p.currentHp, p.maxHp), height: '100%', background: hpColor(p.currentHp, p.maxHp)}} />
                                             </div>
+                                        </button>
+                                    ))}
+                                    <button style={styles.backBtn} onClick={handleBack}>BACK</button>
+                                </div>
+                            )}
+
+                            {view === 'BAG' && (
+                                <div style={styles.bagMenu}>
+                                    {inventory.map((item, i) => (
+                                        <button key={i} style={{...styles.itemBtn, opacity: item.count > 0 ? 1 : 0.5}} onClick={() => item.count > 0 && handleUseItem(i)}>
+                                            <div style={{fontWeight:'bold'}}>{item.item.name} x{item.count}</div>
+                                            <div style={{fontSize:'10px'}}>{item.item.desc}</div>
                                         </button>
                                     ))}
                                     <button style={styles.backBtn} onClick={handleBack}>BACK</button>
@@ -190,6 +220,8 @@ export const BattleOverlay: React.FC = () => {
         hpFill: { height: '100%', transition: 'width 0.5s ease-out' },
         stagesContainer: { marginTop: '5px', display: 'flex', gap: '5px', flexWrap: 'wrap' },
         stageTag: { background: '#2196f3', color: '#fff', fontSize: '10px', padding: '1px 4px', borderRadius: '3px' },
+        partyIcons: { display: 'flex', gap: '5px', marginBottom: '8px' },
+        partyIcon: { width: '12px', height: '12px', borderRadius: '50%', border: '1px solid #000' },
         dialogBox: {
             position: 'absolute', bottom: 0, left: 0, right: 0,
             height: '150px', background: '#fff', border: '4px solid #444',
@@ -200,9 +232,11 @@ export const BattleOverlay: React.FC = () => {
         menu: { display: 'grid', gridTemplateColumns: '1fr 1fr', height: '100%', gap: '5px' },
         movesMenu: { display: 'grid', gridTemplateColumns: '1fr 1fr', height: '100%', gap: '5px' },
         partyMenu: { display: 'grid', gridTemplateColumns: '1fr 1fr', height: '100%', gap: '5px' },
+        bagMenu: { display: 'grid', gridTemplateColumns: '1fr', overflowY: 'auto', maxHeight: '140px', gap: '2px' },
             btn: { fontSize: '18px', fontWeight: 'bold', cursor: 'pointer', border: 'none', background: '#eee', color: '#000' },
             moveBtn: { fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', border: 'none', background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#000' },
             partyBtn: { fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', border: 'none', background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '5px', color: '#000' },
+            itemBtn: { fontSize: '12px', cursor: 'pointer', border: 'none', background: '#fff', textAlign: 'left', padding: '5px', color: '#000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
             ppText: { fontSize: '10px', color: '#333' },
             backBtn: { fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', border: 'none', background: '#f44336', color: '#fff' }
         };    
