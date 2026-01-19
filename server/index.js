@@ -18,10 +18,15 @@ MongoClient.connect(MONGO_URI)
     .then(client => {
         console.log('Connected to MongoDB');
         db = client.db(DB_NAME);
+        
+        app.listen(PORT, () => {
+            console.log(`Server running on http://localhost:${PORT}`);
+        });
     })
-    .catch(error => console.error(error));
-
-// --- Routes ---
+    .catch(error => {
+        console.error('Failed to connect to MongoDB:', error);
+        process.exit(1);
+    });
 
 // 1. Get Pokemon (Paginated List)
 app.get('/api/pokemon', async (req, res) => {
@@ -136,6 +141,3 @@ app.get('/api/items/:key', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-});

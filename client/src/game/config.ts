@@ -4,6 +4,9 @@ import { BattleScene } from './scenes/BattleScene';
 export const gameConfig: Phaser.Types.Core.GameConfig = {
     type: Phaser.AUTO,
     parent: 'game-container',
+    dom: {
+        createContainer: true
+    },
     width: 800,
     height: 600,
     physics: {

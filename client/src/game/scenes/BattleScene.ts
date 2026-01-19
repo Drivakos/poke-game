@@ -3,10 +3,11 @@ import axios from 'axios';
 import { useBattleStore } from '../../stores/useBattleStore';
 import { DataManager } from '../DataManager';
 import { DamageCalculator } from '../DamageCalculator';
+import { AnimationManager } from '../AnimationManager';
 
 export class BattleScene extends Phaser.Scene {
-    private playerSprite: Phaser.GameObjects.Sprite | null = null;
-    private enemySprite: Phaser.GameObjects.Sprite | null = null;
+    private playerSprite: Phaser.GameObjects.DOMElement | null = null;
+    private enemySprite: Phaser.GameObjects.DOMElement | null = null;
     private unsubscribe: (() => void) | null = null;
 
     private playerMon: any = null;
@@ -18,9 +19,11 @@ export class BattleScene extends Phaser.Scene {
 
     preload() {
         this.load.image('background', 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/1.png');
+        // Custom move assets can be loaded here if added
     }
 
     create() {
+        AnimationManager.generateTextures(this);
         DataManager.loadTypeChart();
 
         this.unsubscribe = useBattleStore.subscribe((state, prevState) => {
@@ -30,11 +33,8 @@ export class BattleScene extends Phaser.Scene {
             if (state.activePlayerIndex !== prevState.activePlayerIndex) {
                 this.handlePlayerSwitch(state.activePlayerIndex);
             }
-            // Handle Enemy Switch if implemented later, for now enemy fights to death then next comes out?
-            // The logic for enemy switch needs to be in processEndOfTurn or similar.
         });
 
-        // Random Team Generation (Gen 1: 1-151)
         const getRandomIds = (count: number) => {
             const ids = new Set<number>();
             while(ids.size < count) {
@@ -51,7 +51,6 @@ export class BattleScene extends Phaser.Scene {
 
     async startBattle(playerIds: number[], enemyIds: number[]) {
         try {
-            // 1. Fetch Data
             const playerPromises = playerIds.map(id => axios.get(`http://localhost:3000/api/pokemon/${id}`));
             const enemyPromises = enemyIds.map(id => axios.get(`http://localhost:3000/api/pokemon/${id}`));
 
@@ -60,34 +59,26 @@ export class BattleScene extends Phaser.Scene {
                 Promise.all(enemyPromises)
             ]);
 
-            const baseUrl = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon';
+            const baseUrl = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/showdown';
 
-            // Helper to process a party
             const processParty = async (responses: any[]) => {
                 return Promise.all(responses.map(async (res) => {
                     const p = res.data;
                     const name = typeof p.name === 'object' ? p.name.english : p.name;
                     
-                    // Pick Random Moves
                     let possibleMoves: string[] = [];
-                    // Check learnset (object keys) or moves (array)
                     if (p.learnset && typeof p.learnset === 'object') {
                         possibleMoves = Object.keys(p.learnset);
                     } else if (Array.isArray(p.moves)) {
                         possibleMoves = p.moves;
                     }
 
-                    // Fallback
                     if (possibleMoves.length === 0) possibleMoves = ['tackle', 'struggle'];
 
-                    // Shuffle and take 4
                     const selectedKeys = possibleMoves.sort(() => 0.5 - Math.random()).slice(0, 4);
-                    
-                    // Load Move Data
                     const movesData = await Promise.all(selectedKeys.map(k => DataManager.getMove(k)));
                     const validMoves = movesData.filter(m => m !== null);
 
-                    // Ensure at least one move
                     if (validMoves.length === 0) {
                          const tackle = await DataManager.getMove('tackle');
                          if (tackle) validMoves.push(tackle);
@@ -96,16 +87,16 @@ export class BattleScene extends Phaser.Scene {
                     return {
                         ...p, 
                         name: name,
-                        level: 50, // Bump level to 50 for fun
-                        currentHp: Math.floor(p.stats.HP * 1.5), // Buff HP slightly for longer battles
+                        level: 50,
+                        currentHp: Math.floor(p.stats.HP * 1.5),
                         maxHp: Math.floor(p.stats.HP * 1.5),
                         moves: validMoves,
                         stages: { atk:0, def:0, spa:0, spd:0, spe:0, acc:0, eva:0 },
                         status: null,
                         statusCounter: 0,
                         volatile: {},
-                        spriteBack: `back_${p.id}`,
-                        spriteFront: `front_${p.id}`
+                        spriteBack: `${baseUrl}/back/${p.id}.gif`,
+                        spriteFront: `${baseUrl}/${p.id}.gif`
                     };
                 }));
             };
@@ -113,26 +104,11 @@ export class BattleScene extends Phaser.Scene {
             const playerParty = await processParty(playerResponses);
             const enemyParty = await processParty(enemyResponses);
 
-            // 3. Queue Sprites
-            playerParty.forEach((p: any) => {
-                this.load.image(p.spriteBack, `${baseUrl}/back/${p.id}.png`);
-                this.load.image(p.spriteFront, `${baseUrl}/${p.id}.png`);
-            });
-            enemyParty.forEach((p: any) => {
-                this.load.image(p.spriteFront, `${baseUrl}/${p.id}.png`);
-                // Also load back sprites for enemy in case we want them later? 
-                // Currently only front is used for enemy.
-            });
-
-            // 4. Init Store
             useBattleStore.getState().initBattle(playerParty, enemyParty);
             this.playerMon = playerParty[0];
             this.enemyMon = enemyParty[0];
 
-            this.load.once('complete', () => {
-                this.setupBattleField();
-            });
-            this.load.start();
+            this.setupBattleField();
 
         } catch (err) {
             console.error('Failed to load battle data', err);
@@ -140,8 +116,21 @@ export class BattleScene extends Phaser.Scene {
     }
 
     setupBattleField() {
-        this.enemySprite = this.add.sprite(600, 250, `front_${this.enemyMon.id}`).setScale(3);
-        this.playerSprite = this.add.sprite(200, 400, `back_${this.playerMon.id}`).setScale(3);
+        // Use DOM elements for GIFs
+        const enemyImg = document.createElement('img');
+        enemyImg.src = this.enemyMon.spriteFront;
+        enemyImg.style.width = '150px';
+        enemyImg.style.height = '150px';
+        this.enemySprite = this.add.dom(600, 250, enemyImg);
+        
+        const playerImg = document.createElement('img');
+        playerImg.src = this.playerMon.spriteBack;
+        playerImg.style.width = '150px';
+        playerImg.style.height = '150px';
+        this.playerSprite = this.add.dom(200, 400, playerImg);
+        
+        this.enemySprite.setScale(1.5);
+        this.playerSprite.setScale(1.5);
     }
 
     handlePlayerSwitch(index: number) {
@@ -149,15 +138,16 @@ export class BattleScene extends Phaser.Scene {
         const newMon = party[index];
         this.playerMon = newMon;
 
-        // Visual Switch
         if (this.playerSprite) {
             this.tweens.add({
                 targets: this.playerSprite,
                 x: -100,
                 duration: 500,
                 onComplete: () => {
-                    this.playerSprite?.setTexture(newMon.spriteBack || '');
-                    this.playerSprite?.setAlpha(1); // Ensure visible in case it was fainted/faded
+                    const img = this.playerSprite?.node as HTMLImageElement;
+                    if (img) img.src = newMon.spriteBack || '';
+                    
+                    this.playerSprite?.setAlpha(1);
                     this.tweens.add({
                         targets: this.playerSprite,
                         x: 200,
@@ -177,13 +167,10 @@ export class BattleScene extends Phaser.Scene {
                 return;
             }
 
-            // Locked Move Check (Outrage, etc)
             if (this.playerMon.volatile?.lockedMove) {
                 const lock = this.playerMon.volatile.lockedMove;
                 const newTurns = lock.turns - 1;
-                const move = await DataManager.getMove(lock.moveName); // Need to fetch move data if not stored? 
-                // Ideally we store MoveData, but type was { moveName: string }.
-                // DataManager.getMove handles caching.
+                const move = await DataManager.getMove(lock.moveName);
                 
                 useBattleStore.getState().addLog(`${this.playerMon.name} is rampaging!`);
                 this.executeMove(this.playerMon, this.enemyMon, move, true);
@@ -211,7 +198,6 @@ export class BattleScene extends Phaser.Scene {
                 return;
             }
 
-             // Enemy Locked Move
             if (this.enemyMon.volatile?.lockedMove) {
                 const lock = this.enemyMon.volatile.lockedMove;
                 const newTurns = lock.turns - 1;
@@ -229,7 +215,6 @@ export class BattleScene extends Phaser.Scene {
                 return;
             }
 
-             // Enemy Logic
              useBattleStore.getState().addLog("Enemy used Scratch!");
              const mockMove = { basePower: 40, category: 'Physical', type: 'Normal', name: 'Scratch', accuracy: 100 };
              this.executeMove(this.enemyMon, this.playerMon, mockMove, false);
@@ -237,11 +222,9 @@ export class BattleScene extends Phaser.Scene {
     }
 
     checkCanMove(mon: any, isPlayer: boolean): boolean {
-        // Confusion Check
         if (mon.volatile?.confusion) {
             useBattleStore.getState().addLog(`${mon.name} is confused!`);
             
-            // Decrement Turn
             const newTurns = mon.volatile.confusion - 1;
             if (newTurns <= 0) {
                  useBattleStore.getState().setVolatile(isPlayer ? 'player' : 'enemy', { confusion: undefined });
@@ -313,6 +296,7 @@ export class BattleScene extends Phaser.Scene {
     }
 
     executeMove(attacker: any, defender: any, move: any, isPlayer: boolean) {
+        // Safe Cast to DOM Element if logic requires sprite props
         const attackerSprite = isPlayer ? this.playerSprite : this.enemySprite;
         const targetSprite = isPlayer ? this.enemySprite : this.playerSprite;
         const targetKey = isPlayer ? 'enemy' : 'player'; 
@@ -327,13 +311,14 @@ export class BattleScene extends Phaser.Scene {
         const performHit = () => {
             currentHit++;
             
-            this.playAttackAnim(attackerSprite, targetSprite, move.category, () => {
-                // Check Hit/Miss (Only on first hit usually, but for simplicity check every time or assume hits continue?)
-                // Gen 1: One accuracy check for all hits.
-                // We'll do one accuracy check at start ideally, but `DamageCalculator` does it internally.
-                // Let's rely on DamageCalculator but maybe override accuracy for subsequent hits?
-                // Or simpler: just call it. if miss, break loop.
-                
+            // Cast sprites for AnimationManager (it expects Sprite or GameObject, DOMElement is GameObject)
+            // AnimationManager uses .x, .y which exist on DOMElement.
+            // However, type signature says Phaser.Scene, ...
+            // The `playAttackAnim` function expects Phaser.GameObjects.Sprite.
+            // I need to update `playAttackAnim` signature to accept `DOMElement` or `GameObject`.
+            // For now, I'll cast to `any` in the call to avoid errors or update the method below.
+            
+            this.playAttackAnim(attackerSprite as any, targetSprite as any, move.category, move.type, move.name || '', () => {
                 // @ts-ignore
                 const result = DamageCalculator.calculate(attacker, defender, move);
                 
@@ -353,7 +338,7 @@ export class BattleScene extends Phaser.Scene {
                         Object.keys(move.boosts).forEach(stat => {
                             const val = move.boosts[stat];
                             const change = val > 0 ? 'rose' : 'fell';
-                            this.showFloatingText(targetSprite, `${stat.toUpperCase()} ${change}!`);
+                            this.showFloatingText(targetSprite as any, `${stat.toUpperCase()} ${change}!`);
                         });
                     }
                     
@@ -375,7 +360,6 @@ export class BattleScene extends Phaser.Scene {
                          else if (result.effectiveness === 1) useBattleStore.getState().addLog("It's effective.");
                     }
 
-                    // Special Effects
                     if (move.selfDestruct) {
                         useBattleStore.getState().addLog(`${attacker.name} self-destructed!`);
                         if (isPlayer) useBattleStore.getState().damagePlayer(attacker.currentHp);
@@ -389,7 +373,7 @@ export class BattleScene extends Phaser.Scene {
                         useBattleStore.getState().addLog(`${attacker.name} drained health!`);
                     }
 
-                    if (move.recoil && !move.selfDestruct) { // Don't recoil if you just exploded
+                    if (move.recoil && !move.selfDestruct) { 
                         const recoilDmg = Math.max(1, Math.floor(result.damage * move.recoil));
                         if (isPlayer) useBattleStore.getState().damagePlayer(recoilDmg);
                         else useBattleStore.getState().damageEnemy(recoilDmg);
@@ -401,7 +385,7 @@ export class BattleScene extends Phaser.Scene {
                         Object.keys(move.selfBoosts).forEach(stat => {
                             const val = move.selfBoosts[stat];
                             const change = val > 0 ? 'rose' : 'fell';
-                            this.showFloatingText(attackerSprite, `${stat.toUpperCase()} ${change}!`);
+                            this.showFloatingText(attackerSprite as any, `${stat.toUpperCase()} ${change}!`);
                         });
                     }
 
@@ -423,31 +407,24 @@ export class BattleScene extends Phaser.Scene {
                     useBattleStore.getState().addLog(`${isPlayer ? 'Enemy' : 'Player'} became confused!`);
                 }
 
-                // Check Faint
                 const state = useBattleStore.getState();
                 const targetHp = isPlayer ? state.enemyHp : state.playerHp;
 
                 if (targetHp <= 0) {
                     useBattleStore.getState().addLog(`${isPlayer ? 'Enemy' : 'Player'} fainted!`);
-                    this.playFaintAnim(targetSprite, () => {
+                    this.playFaintAnim(targetSprite as any, () => {
                         this.handleFaint(isPlayer);
                     });
                     return; 
                 }
 
                 if (currentHit < totalHits) {
-                    // Next Hit
                     this.time.delayedCall(200, performHit);
                 } else {
-                    // Finished
                     if (totalHits > 1 && hitsLanded > 0) {
                         useBattleStore.getState().addLog(`Hit ${hitsLanded} time(s)!`);
                     }
 
-                    // Apply Status Effect Chance (Only once at end?)
-                    // Usually Multi-hit moves don't have secondary status effects (except King's Rock).
-                    // Twineedle has Poison chance (20% per hit in later gens, or last hit?).
-                    // Let's keep it simple: apply status check once at end.
                     if (move.statusEffect && Math.random() * 100 < (move.statusChance || 100)) {
                         const targetKey = isPlayer ? 'enemy' : 'player';
                         useBattleStore.getState().applyStatus(targetKey, move.statusEffect);
@@ -473,7 +450,6 @@ export class BattleScene extends Phaser.Scene {
     }
 
     processEndOfTurn() {
-        // Burn / Poison / Seed / Wrap Damage
         const processDot = (mon: any, isPlayer: boolean) => {
             if (!mon.status || mon.currentHp <= 0) return;
             
@@ -506,8 +482,7 @@ export class BattleScene extends Phaser.Scene {
             } else if (mon.status === 'SEED') {
                 dmg = Math.floor(maxHp / 8);
                 msg = `${mon.name}'s health is sapped by Leech Seed!`;
-                // Heal the opponent
-                if (isPlayer) useBattleStore.getState().damageEnemy(-dmg); // Negative damage = heal
+                if (isPlayer) useBattleStore.getState().damageEnemy(-dmg);
                 else useBattleStore.getState().damagePlayer(-dmg);
             }
 
@@ -521,12 +496,11 @@ export class BattleScene extends Phaser.Scene {
         processDot(this.playerMon, true);
         processDot(this.enemyMon, false);
 
-        // Check Faint after DOT
         const pState = useBattleStore.getState();
         if (pState.playerHp <= 0) {
-            this.playFaintAnim(this.playerSprite, () => this.handleFaint(false));
+            this.playFaintAnim(this.playerSprite as any, () => this.handleFaint(false));
         } else if (pState.enemyHp <= 0) {
-            this.playFaintAnim(this.enemySprite, () => this.handleFaint(true));
+            this.playFaintAnim(this.enemySprite as any, () => this.handleFaint(true));
         } else {
             useBattleStore.getState().setPhase('PLAYER_SELECT');
         }
@@ -541,7 +515,7 @@ export class BattleScene extends Phaser.Scene {
         return map[code] || code;
     }
 
-    showFloatingText(target: Phaser.GameObjects.Sprite | null, text: string) {
+    showFloatingText(target: Phaser.GameObjects.DOMElement | null, text: string) {
         if (!target) return;
         const t = this.add.text(target.x, target.y - 50, text, { 
             fontSize: '24px', color: '#ffffff', stroke: '#000000', strokeThickness: 4 
@@ -556,51 +530,40 @@ export class BattleScene extends Phaser.Scene {
         });
     }
 
-    playAttackAnim(attacker: Phaser.GameObjects.Sprite | null, target: Phaser.GameObjects.Sprite | null, category: string, onComplete: () => void) {
+    playAttackAnim(attacker: Phaser.GameObjects.DOMElement | null, target: Phaser.GameObjects.DOMElement | null, category: string, moveType: string, moveName: string, onComplete: () => void) {
         if (!attacker || !target) {
             onComplete();
             return;
         }
 
-        const startX = attacker.x;
-        const startY = attacker.y;
-        const isPlayer = attacker.x < 400;
-
         if (category === 'Status') {
-            // Pulse Animation
             this.tweens.add({
                 targets: attacker,
-                scaleX: attacker.scaleX * 1.1,
-                scaleY: attacker.scaleY * 1.1,
+                scaleX: (attacker.scaleX || 1) * 1.1,
+                scaleY: (attacker.scaleY || 1) * 1.1,
                 duration: 200,
                 yoyo: true,
                 repeat: 1,
-                onComplete: onComplete
+                onComplete: () => {
+                    onComplete();
+                }
             });
         } else {
-            // Physical Lunge
+            const isPlayer = attacker.x < 400;
+            
             this.tweens.add({
                 targets: attacker,
-                x: isPlayer ? attacker.x + 50 : attacker.x - 50,
-                y: isPlayer ? attacker.y - 30 : attacker.y + 30,
+                x: isPlayer ? attacker.x + 30 : attacker.x - 30,
                 duration: 100,
                 yoyo: true,
-                repeat: 1,
-                onYoyo: () => {
-                    if (target.alpha === 1) target.setAlpha(0.5);
-                    else target.setAlpha(1);
-                },
                 onComplete: () => {
-                    target.setAlpha(1);
-                    attacker.x = startX;
-                    attacker.y = startY;
-                    onComplete();
+                    AnimationManager.playMoveAnimation(this, moveName, moveType, attacker.x, attacker.y, target.x, target.y, onComplete);
                 }
             });
         }
     }
 
-    playFaintAnim(target: Phaser.GameObjects.Sprite | null, onComplete: () => void) {
+    playFaintAnim(target: Phaser.GameObjects.DOMElement | null, onComplete: () => void) {
         if (!target) {
             onComplete();
             return;
@@ -619,48 +582,37 @@ export class BattleScene extends Phaser.Scene {
         const state = useBattleStore.getState();
         
         if (playerWon) {
-            // Enemy Fainted. Check for next enemy.
             const nextEnemyIndex = state.enemyParty.findIndex(p => p.currentHp > 0);
             if (nextEnemyIndex !== -1) {
-                // Switch Enemy
                 this.time.delayedCall(1000, () => {
                     useBattleStore.getState().switchEnemyPokemon(nextEnemyIndex);
                     const newEnemy = useBattleStore.getState().enemyParty[nextEnemyIndex];
                     this.enemyMon = newEnemy;
                     
-                    // Update Sprite
-                    this.enemySprite?.setTexture(newEnemy.spriteFront || '');
-                    this.enemySprite?.setAlpha(1);
-                    this.tweens.add({
-                        targets: this.enemySprite,
-                        x: 600, // Reset position if needed
-                        y: 250,
-                        alpha: { from: 0, to: 1 },
-                        duration: 1000
-                    });
+                    if (this.enemySprite) {
+                        const img = this.enemySprite.node as HTMLImageElement;
+                        img.src = newEnemy.spriteFront || '';
+                        
+                        this.enemySprite.setAlpha(1);
+                        this.enemySprite.setY(250); // Reset position
+                        this.tweens.add({
+                            targets: this.enemySprite,
+                            alpha: { from: 0, to: 1 },
+                            duration: 1000
+                        });
+                    }
 
-                    // Player gets to move again? Or new turn?
-                    // Usually new turn starts.
                     useBattleStore.getState().setPhase('PLAYER_SELECT');
                 });
             } else {
-                // No enemies left
                 useBattleStore.getState().setPhase('END');
                 useBattleStore.setState({ winner: 'player' });
             }
         } else {
-            // Player Fainted.
             const nextPlayerIndex = state.playerParty.findIndex(p => p.currentHp > 0);
             if (nextPlayerIndex !== -1) {
-                // For MVP, Force Switch to next available or let player choose?
-                // Let's just force switch to the first available for now to keep flow continuous, 
-                // or better, go to PARTY menu. 
-                // Current UI doesn't support "Forced Switch" state easily.
-                // Let's just Auto-Switch for Player too for now.
-                
                 useBattleStore.getState().addLog(`Player sent out ${state.playerParty[nextPlayerIndex].name}!`);
                 useBattleStore.getState().switchPlayerPokemon(nextPlayerIndex);
-                // Sprite update handled in subscriber `handlePlayerSwitch`
                 
                 useBattleStore.getState().setPhase('PLAYER_SELECT');
             } else {
