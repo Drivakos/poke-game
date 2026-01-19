@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getMovePriority } from './MovePriorities';
 
 interface TypeData {
     name: string;
@@ -63,6 +64,9 @@ export class DataManager {
             } else if (['Seismic Toss', 'Night Shade', 'Psywave'].includes(data.name)) {
                 data.fixedDamage = 'level';
             }
+            
+            // Set priority from lookup table
+            data.priority = getMovePriority(data.name);
             
             // Self Boosts / Drops
             if (['Overheat', 'Draco Meteor', 'Leaf Storm', 'Psycho Boost', 'Fleur Cannon'].includes(data.name)) {

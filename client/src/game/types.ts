@@ -55,6 +55,7 @@ export interface MoveData {
     selfDestruct?: boolean;
     fixedDamage?: number | 'level';
     selfBoosts?: Partial<StatStages>;
+    priority?: number; // Move priority, range -7 to +5, default 0
 }
 
 export interface ItemData {
